@@ -12,9 +12,6 @@ __pycache__/
 # Generated images
 output/
 
-# LoRA adapter weights (user-supplied)
-loras/
-
 # macOS
 .DS_Store
 

@@ -1,12 +1,12 @@
 AI Image Studio
 Copyright (c) 2026 ottocheng
-Copyright (c) 2025 Ivan Fioravanti (src/z_image_mps/ — the z-image-mps CLI)
 
 This LICENSE file governs the **source code** in this repository.
 
 The **model weights** this project downloads and runs at runtime are NOT part of
-this repository and are NOT covered by this license. Each model is distributed
-under its own license by its publisher (Apache-2.0 for the models used here).
+this repository and are NOT covered by this license. The model is distributed
+under its own license by its publisher (Qwen Research License, non-commercial,
+for Qwen-Image-2.1 and its quantizations).
 
 -------------------------------------------------------------------------------
 
@@ -14,8 +14,8 @@ The source code in this repository is licensed under the MIT License:
 
 MIT License
 
-Copyright (c) 2026 ottocheng (project code: web UI, launcher, configuration)
-Copyright (c) 2025 Ivan Fioravanti (src/z_image_mps/ — the z-image-mps CLI)
+Copyright (c) 2026 ottocheng (web UI, launcher, configuration)
+Copyright (c) 2025 newideas99 (webui/mps_chunked_attn.py — chunked-SDPA patch, adapted from ultra-fast-image-gen)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -15,10 +15,6 @@ The app runs the SDNQ int4-quantized checkpoint
 [`OzzyGT/Qwen_Image_2_1_Turbo_sdnq_dynamic_4bit`](https://huggingface.co/OzzyGT/Qwen_Image_2_1_Turbo_sdnq_dynamic_4bit)
 (~11.5 GB resident; the bf16 original is ~32 GB and cannot fit a 16 GB Mac).
 
-Also includes the [`z-image-mps`](https://github.com/ivanfioravanti/z-image-mps)
-CLI (vendored under `src/z_image_mps/`, a legacy side-tool unrelated to the
-web UI) for shell-scripting Z-Image-Turbo.
-
 ## Requirements
 
 > **Apple Silicon Mac only.** Targets **base M-series chips (M1+) with 16 GB
@@ -110,68 +106,11 @@ The browser tab shows a 🎨 favicon.
 
 ---
 
-## CLI usage (Z-Image-Turbo, legacy side-tool)
-
-The `z-image-mps` CLI (from ivanfioravanti) is also installed for shell
-scripting. It is **independent of the web UI** — the web UI is entirely
-Qwen-Image-2.1, while the CLI drives its own full-precision Z-Image-Turbo
-model:
-
-```bash
-uv run z-image-mps -p "a cozy neon-lit alley, cinematic" --aspect 16:9 --device mps
-```
-
-### CLI reference
-
-```
-z-image-mps --prompt "..." [options]
-
--p, --prompt            Text prompt
---negative-prompt       Negative prompt text
--s, --steps             Inference steps (default: 9)
---guidance-scale        CFG scale (Turbo expects 0.0)
---aspect {1:1,16:9,9:16,4:3,3:4}
---height / --width      Exact dimensions (default 1024x1024)
---seed                  Seed for reproducibility
---num-images            Number of images to generate
--o, --output            Output file (otherwise saved to output/)
---outdir                Output directory
---device {auto,mps,cuda,cpu}
---attention-backend     sdpa | flash2 | flash3
---compile               Try torch.compile() on the DiT transformer
---cpu-offload           Enable CPU offload (CUDA only)
---lora                  LoRA name or path (e.g. 'Technically-Color-Z-Image-Turbo')
---lora-scale            LoRA adapter weight scale (default: 1.3)
-```
-
-### Examples
-
-```bash
-# Square default
-z-image-mps -p "Analog film portrait of a skateboarder, shallow depth of field"
-
-# Widescreen
-z-image-mps -p "Cyberpunk night market, neon haze" --aspect 16:9
-
-# Multiple images with a fixed seed (increments per image)
-z-image-mps -p "Nordic fjord at dawn, misty" --num-images 3 --seed 123
-```
-
-LoRA support: drop a `.safetensors` file into `loras/<name>/` and load it with
-`--lora <name> --lora-scale 0.8`.
-
----
-
 ## What's installed
 
 ```
 ai-image-studio/                         # project root
 ├── AI-Image-Studio.command              # ⭐ double-click in Finder to launch
-├── image-backend.py                     # CLI entry-point shim (z-image-mps console script)
-├── src/z_image_mps/                     # ivanfioravanti's CLI (z-image-mps package)
-│   ├── cli.py
-│   ├── gradio_app.py
-│   └── lora_utils.py
 ├── webui/                               # the app (a package; run with python -m webui.app)
 │   ├── app.py                           #   Gradio: Generate tab + Edit tab (both Qwen)
 │   ├── pipelines.py                     #   PipelineManager — lazy-load, mutex-guarded
@@ -277,7 +216,6 @@ The next launch will re-download what it needs.
 
 - [QwenLM/Qwen-Image-2.1](https://github.com/QwenLM/Qwen-Image-2.1) — the model (Qwen Research License)
 - [OzzyGT](https://huggingface.co/OzzyGT) — the SDNQ dynamic int4 quantization of Qwen-Image-2.1-Turbo
-- [ivanfioravanti/z-image-mps](https://github.com/ivanfioravanti/z-image-mps) — the vendored CLI
 - [Disty0/sdnq](https://github.com/Disty0/sdnq) — the SDNQ quantization engine
 - [huggingface/diffusers](https://github.com/huggingface/diffusers) — pipeline library (git main)
 - [newideas99/ultra-fast-image-gen](https://github.com/newideas99/ultra-fast-image-gen) — source of the chunked-SDPA memory patch in `webui/mps_chunked_attn.py`
