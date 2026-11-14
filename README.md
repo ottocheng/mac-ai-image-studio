@@ -132,60 +132,37 @@ Run the tests: `uv run python -m pytest tests/ -q`
 
 ---
 
-## Performance & test results
+## Performance
 
-All numbers below were measured on the dev machine **through the app's own
-code paths** — the actual Gradio handler functions (`qwen_generate`,
-`qwen_edit`), not a separate benchmark harness.
+Indicative timings for the 8-step Turbo schedule (single image, warm disk
+cache). Faster M-series chips (M3/M4, especially Pro/Max) run proportionally
+quicker; base M1/M2 chips run roughly 2–3× slower than M1 Pro-class due to
+memory bandwidth.
 
-**Test environment**
-
-| Item | Value |
-|---|---|
-| Machine | MacBook Pro (2021), Apple M1 Pro — 10-core CPU, 16 GB unified memory (200 GB/s) |
-| macOS | 26 (Darwin 27.2.0) |
-| Python | 3.12 (uv-managed) |
-| Stack | torch 2.15.0 · diffusers 0.44.0.dev0 (git main) · sdnq 0.2.9 · transformers 5.23.0 · gradio 6.32.0 · torchvision 0.29.2 |
-| Model | `OzzyGT/Qwen_Image_2_1_Turbo_sdnq_dynamic_4bit` (warm disk cache, 8-step Turbo schedule) |
-| Date | Nov 15, 2026 |
-
-### End-to-end runs
-
-| Test | Result | Detail |
+| Op | M1 Pro-class 16 GB | Base M1/M2 16 GB |
 |---|---|---|
-| Text-to-image 512×512, seed 42 | ✅ **124.6 s** | prompt *"a red apple on a wooden table, studio lighting, photorealistic"*; 8 denoise steps ≈ 85 s (10.7 s/step: 13.5 s peak at step 2, settling to ~10.1 s as the KV prefix warms) + ~40 s prompt encoding (SDNQ-dequantized Qwen3-VL TE), VAE decode, save. RGBA output → `output/` |
-| Instruction edit 512×512, seed 7 | ✅ **195.4 s** | reference = the apple generated above; instruction *"make it a green apple on a dark slate table, moody lighting"*; 8 steps ≈ 144 s (18.0 s/step, range 15.2–28.4 s) + ~51 s reference-image preprocessing + prompt encoding + decode. Editing costs ≈ 1.6× generation |
-| Model load (cold process, warm cache) | ✅ **17.2–18.7 s** | **10.80 GB resident on MPS** after load |
-| App boot (`uv run python -m webui.app`) | ✅ < 20 s | HTTP 200 on http://127.0.0.1:7860 |
-| Unit tests (`uv run python -m pytest tests/ -q`) | ✅ **9/9** in ~5 s | PipelineManager load / already-loaded no-op / swap / unload / 8-thread concurrency race, plus UI-helper functions (seed, size clamping, presets, paths) |
-| Failure handling | ✅ verified | with `torchvision` deliberately absent, the handler returned a friendly `⚠️ Generation failed — ImportError: …` status instead of a raw traceback (this is exactly how the missing dependency was caught during testing) |
+| Model load (cached) | ~20 s | ~40 s |
+| Generate 512×512, 8 steps | ~2 min | ~4–6 min |
+| Edit 512×512, 8 steps | ~3 min | ~6–10 min |
+| Generate 1024×1024, 8 steps | ~7–10 min | avoid on 16 GB |
 
-**Memory behavior (16 GB):** all three components live on MPS (transformer
-~4.1 GB + text encoder ~6.7 GB + VAE ~0.7 GB ≈ 10.8 GB allocated) and both
-generation and editing complete without swap death. The trick: the text
-encoder is only touched during prompt encoding, so macOS pages it out during
-the long denoise loop, whose active working set is the transformer (~5–7 GB)
-plus activations.
+Editing costs ≈ 1.6× generation (the reference image joins the attention
+context), and prompt encoding through the SDNQ-dequantized Qwen3-VL text
+encoder adds ~30–50 s per run.
 
-**First download:** 16 files, ~11 GB. On this machine the default hf-xet
-path produced a broken cache (snapshot symlinks dangling at empty blobs,
-while `snapshot_download` still reported success). If a fresh install fails
-to load with file-not-found errors, clear
+**Memory (16 GB):** the full pipeline is ~11 GB resident on MPS (transformer
+~4.1 GB + text encoder ~6.7 GB + VAE ~0.7 GB), and both generation and
+editing complete without swapping out. The text encoder is only touched
+during prompt encoding, so macOS pages it out during the denoise loop; the
+active working set stays near the transformer plus activations.
+
+**If a fresh install fails to load the model** with file-not-found errors,
+the HF cache may be corrupt — the hf-xet download path has been observed
+leaving dangling symlinks while still reporting success. Clear
 `~/.cache/huggingface/hub/models--OzzyGT--Qwen_Image_2_1_Turbo_sdnq_dynamic_4bit`
-and re-download with `HF_HUB_DISABLE_XET=1` — that plain-HTTP path completed
-in ~3 min at 60–75 MB/s here.
+and re-download with `HF_HUB_DISABLE_XET=1`.
 
-### Expectations on other machines
-
-| Op | M1 Pro 16 GB (measured) | Base M1/M2 16 GB (estimated) |
-|---|---|---|
-| Model load (cached) | 17–19 s | ~2× slower |
-| Generate 512×512, 8 steps | ~125 s | ~4–6 min |
-| Edit 512×512, 8 steps | ~195 s | ~6–10 min |
-| Generate 1024×1024, 8 steps | ~7–10 min (est., token count ×4) | avoid on 16 GB |
-
-> Base-chip estimates scale by memory bandwidth (68 vs 200 GB/s) and GPU
-> cores. SDNQ on MPS dequantizes weights to bf16 on every forward — a memory
+> SDNQ on MPS dequantizes weights to bf16 on every forward — a memory
 > technology, not a speed one. If throughput matters more than this app's
 > simplicity, [mflux](https://github.com/mflux-community/mflux)/MLX runs the
 > same model family with native INT8 matmul and pulls further ahead on M3+
