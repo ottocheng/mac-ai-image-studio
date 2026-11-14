@@ -140,7 +140,7 @@ code paths** — the actual Gradio handler functions (`qwen_generate`,
 
 **Test environment**
 
-| | |
+| Item | Value |
 |---|---|
 | Machine | MacBook Pro (2021), Apple M1 Pro — 10-core CPU, 16 GB unified memory (200 GB/s) |
 | macOS | 26 (Darwin 27.2.0) |
