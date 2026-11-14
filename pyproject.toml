@@ -3,7 +3,7 @@ name = "z-image-mps"
 version = "0.1.0"
 description = "Generate images with Tongyi-MAI Z-Image Turbo on Apple Silicon (MPS), CUDA, or CPU."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Ivan Fioravanti" }]
 dependencies = [
@@ -11,9 +11,10 @@ dependencies = [
     "diffusers @ git+https://github.com/huggingface/diffusers",
     "gradio>=4.44.0",
     "safetensors>=0.4.0",
-    "scipy>=1.11",            # required by FlowMatchEulerDiscreteScheduler(use_beta_sigmas=True)
-    "sdnq>=0.2.1",            # registers SDNQ quantization with diffusers; needed for the SDNQ-quantized Turbo/FLUX checkpoints
+    "scipy>=1.11", # required by FlowMatchEulerDiscreteScheduler(use_beta_sigmas=True)
+    "sdnq>=0.2.1", # registers SDNQ quantization with diffusers; needed for the SDNQ-quantized Turbo/FLUX checkpoints
     "torch>=2.3.0",
+    "torchvision>=0.29.2",
     "transformers>=4.44.0",
 ]
 
@@ -30,3 +31,8 @@ allow-direct-references = true
 
 [tool.uv]
 package = true
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]

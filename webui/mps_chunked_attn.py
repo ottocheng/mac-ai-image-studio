@@ -5,10 +5,11 @@ WHY THIS EXISTS
 On Apple Silicon MPS there is no FlashAttention backend, so PyTorch's
 ``F.scaled_dot_product_attention`` falls back to the "math" path that
 materializes the full ``Lq x Lk`` attention-score matrix in one allocation.
-For FLUX.2-klein at 1024px the token grid is large enough (~16k tokens)
-that this single allocation is what pushes the unified-memory working set
-into disk swap -- the root cause of the multi-hundred-second per-edit
-slowdowns measured on a 16 GB Mac.
+For large-token-grid diffusion transformers (originally observed with
+FLUX.2-klein at 1024px ~16k tokens; now equally relevant for Qwen-Image
+at higher resolutions) this single allocation is what pushes the
+unified-memory working set into disk swap -- the root cause of
+multi-hundred-second per-image slowdowns measured on a 16 GB Mac.
 
 WHAT IT DOES
 ------------

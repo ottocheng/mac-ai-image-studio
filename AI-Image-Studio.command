@@ -31,4 +31,4 @@ echo " Close this Terminal window to stop the server."
 echo "------------------------------------------------------------"
 
 # inbrowser=True in app.py opens the browser when the server is ready
-exec uv run python webui/app.py
+exec uv run python -m webui.app

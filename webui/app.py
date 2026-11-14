@@ -1,43 +1,41 @@
-"""Unified AI image web UI: Generate (Turbo) + Edit (FLUX.2-klein-4B).
+"""Unified AI image web UI: Qwen-Image-2.1-Turbo for generation AND editing.
 
-Run:
-    cd /Users/ottocheng/Project/image-studio
-    uv run python webui/app.py
+Run (from the repo root):
+    uv run python -m webui.app
     # or just double-click AI-Image-Studio.command in Finder
 
 Then open http://127.0.0.1:7860 in your browser.
 
-Architecture note: pipelines are imported from webui/pipelines.py and kept
-resident in this process. Spawning the CLI per request would reload the
-~3.5 GB Turbo checkpoint every call (~12 s overhead each). Resident pipelines
-make the first call pay that cost once and every subsequent call skips it.
-The two pipelines cannot both be resident on 16 GB unified memory, so
-PipelineManager unloads the other one before loading the requested one
-(see pipelines.py).
+Architecture note: the pipeline is imported from webui/pipelines.py and kept
+resident in this process. One model serves both tabs — Qwen-Image-2.1-Turbo
+is a unified text-to-image + instruction-editing checkpoint. The 8-step
+sampling schedule is baked into the checkpoint; the UI deliberately exposes
+no steps/guidance controls because they cannot override it (only an explicit
+`sigmas` argument can, which we don't pass).
+
+License note: Qwen-Image-2.1 weights are Qwen Research License (non-commercial).
 """
 from __future__ import annotations
 
 import warnings
 
 # Silence one specific Starlette deprecation that leaks through gradio's
-# HTTP layer (gradio/routes.py:1379 still references the renamed constant).
-# Match by message so real deprecations still surface.
+# HTTP layer. Match by message so real deprecations still surface.
 warnings.filterwarnings(
     "ignore",
     message=r"'HTTP_422_UNPROCESSABLE_ENTITY' is deprecated",
 )
 
 import gc
-import os
 import secrets
 import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import gradio as gr
 
-from pipelines import MANAGER, LoadReport
+from .pipelines import MANAGER, LoadReport
 
 OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
@@ -63,168 +61,191 @@ def _fmt_load_report(r: LoadReport, action: str) -> str:
     return f"{action} loaded in {r.seconds:.1f}s — MPS {r.mps_gb:.2f} GB"
 
 
-# ---------------------------------------------------------------- Turbo
-def turbo_generate(
+def _cleanup_mps() -> None:
+    gc.collect()
+    import torch
+
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
+def _clamp_size(h: int, w: int) -> tuple[int, int]:
+    """Multiple of 16 for the VAE, floored at 256."""
+    return max(256, (h // 16) * 16), max(256, (w // 16) * 16)
+
+
+# ---------------------------------------------------------------- Generate
+def qwen_generate(
     prompt: str,
-    negative_prompt: str,
     size_preset: str,
-    custom_height: int,
-    custom_width: int,
-    steps: int,
-    guidance: float,
+    custom_height: float,
+    custom_width: float,
     seed: int,
-    num_images: int,
+    num_images: float,
     progress: gr.Progress = gr.Progress(),
 ):
     import torch
-    from PIL import Image
 
     if not prompt.strip():
         return None, "Prompt is empty."
 
-    # Resolve size
     if size_preset == "Custom":
-        h, w = int(custom_height), int(custom_width)
+        h, w = _clamp_size(int(custom_height), int(custom_width))
     else:
-        # preset like "512 x 512 (square)" → take the two ints
-        parts = [int(s) for s in size_preset.replace("×", "x").split() if s.isdigit()]
-        h, w = parts[0], parts[1]
-    # Multiple of 16 for VAE
-    h = max(256, (h // 16) * 16)
-    w = max(256, (w // 16) * 16)
+        w, h = SIZE_PRESETS[size_preset]
 
-    progress(0.0, desc="Loading Turbo model...")
-    load_report = MANAGER.load_turbo()
-    pipe = MANAGER.get_turbo()
+    load_report = None
+    try:
+        progress(0.0, desc="Loading Qwen-Image-2.1-Turbo (first run downloads ~11.5 GB)...")
+        load_report = MANAGER.load_qwen()
+        pipe = MANAGER.get_qwen()
 
-    n = max(1, min(int(num_images), 4))
-    base_seed = _seed_from(seed)
-    images: list[Image.Image] = []
-    t_start = time.time()
+        n = max(1, min(int(num_images), 4))
+        base_seed = _seed_from(seed)
+        images = []
+        t_start = time.time()
 
-    for i in range(n):
-        seed_i = base_seed + i
-        progress(
-            i / n,
-            desc=f"Generating {i+1}/{n}  ({w}x{h}, steps={steps}, seed={seed_i})",
-        )
-
-        # Default args pin the loop vars at closure-creation time — without
-        # them, every callback would see the final iteration's values (Python
-        # late-binding gotcha).
-        def on_step_end(pipe, step_index, timestep, callback_kwargs,
-                        _i=i, _n=n, _steps=steps, _seed=seed_i):
+        for i in range(n):
+            seed_i = base_seed + i
             progress(
-                (_i + (step_index + 1) / _steps) / _n,
-                desc=f"Generating {_i + 1}/{_n}  step {step_index + 1}/{_steps}  seed={_seed}",
+                i / n,
+                desc=f"Generating {i+1}/{n}  ({w}x{h}, 8-step Turbo schedule, seed={seed_i})",
             )
-            return callback_kwargs
 
-        with torch.inference_mode():
-            result = pipe(
-                prompt=prompt.strip(),
-                negative_prompt=negative_prompt.strip() or None,
-                height=h,
-                width=w,
-                num_inference_steps=int(steps),
-                guidance_scale=float(guidance),
-                generator=torch.Generator("mps").manual_seed(seed_i),
-                callback_on_step_end=on_step_end,
-            )
-        images.append(result.images[0])
+            # Default args pin the loop vars at closure-creation time — without
+            # them, every callback would see the final iteration's values
+            # (Python late-binding gotcha).
+            def on_step_end(pipe, step_index, timestep, callback_kwargs,
+                            _i=i, _n=n, _seed=seed_i):
+                progress(
+                    (_i + (step_index + 1) / 8) / _n,
+                    desc=f"Generating {_i + 1}/{_n}  step {step_index + 1}/8  seed={_seed}",
+                )
+                return callback_kwargs
 
-    progress(1.0, desc="Done")
+            with torch.inference_mode():
+                result = pipe(
+                    prompt=prompt.strip(),
+                    width=w,
+                    height=h,
+                    true_cfg_scale=1.0,  # Turbo is guidance-distilled
+                    use_kv_cache=True,
+                    generator=torch.Generator("cpu").manual_seed(seed_i),
+                    callback_on_step_end=on_step_end,
+                )
+            images.append(result.images[0])
 
-    elapsed = time.time() - t_start
-    # Save all + return gallery
-    saved_paths = []
-    for i, img in enumerate(images):
-        p = _timestamped_path(f"turbo-{i+1}")
-        img.save(p)
-        saved_paths.append(str(p))
+        progress(1.0, desc="Done")
+        elapsed = time.time() - t_start
 
-    status = (
-        f"{_fmt_load_report(load_report, 'Turbo')}  |  "
-        f"Generated {n} image{'s' if n != 1 else ''} at {w}x{h} in {elapsed:.1f}s "
-        f"(~{elapsed/n:.1f}s each, {steps} steps)  |  "
-        f"Seeds: {[base_seed + i for i in range(n)]}"
-    )
-    gallery = [(img, f"img {i+1}") for i, img in enumerate(images)]
-    return gallery, status
+        saved_paths = []
+        for i, img in enumerate(images):
+            p = _timestamped_path(f"qwen-{i+1}")
+            img.save(p)
+            saved_paths.append(str(p))
+
+        status = (
+            f"{_fmt_load_report(load_report, 'Qwen-Image-2.1-Turbo')}  |  "
+            f"Generated {n} image{'s' if n != 1 else ''} at {w}x{h} in {elapsed:.1f}s "
+            f"(~{elapsed/n:.1f}s each, 8-step schedule)  |  "
+            f"Seeds: {[base_seed + i for i in range(n)]}"
+        )
+        gallery = [(img, f"img {i+1}") for i, img in enumerate(images)]
+        return gallery, status
+
+    except Exception as exc:  # friendly failure for a double-click consumer app
+        return None, f"⚠️ Generation failed — {type(exc).__name__}: {exc}"
+    finally:
+        _cleanup_mps()
 
 
-# ---------------------------------------------------------------- FLUX editor
-def flux_edit(
+# ---------------------------------------------------------------- Edit
+def qwen_edit(
     input_image,
     prompt: str,
-    steps: int,
-    guidance: float,
+    size_preset: str,
+    custom_height: float,
+    custom_width: float,
     seed: int,
     progress: gr.Progress = gr.Progress(),
 ):
     import torch
-    from PIL import Image
 
     if input_image is None:
         return None, "Please upload or drop an image to edit."
     if not prompt.strip():
         return None, "Editing instruction is empty."
 
-    if isinstance(input_image, dict):
-        input_image = input_image.get("path") or input_image.get("url")
-    if isinstance(input_image, str):
-        input_image = Image.open(input_image).convert("RGB")
+    if size_preset == "Custom":
+        h, w = _clamp_size(int(custom_height), int(custom_width))
+    else:
+        w, h = SIZE_PRESETS[size_preset]
 
-    progress(0.0, desc="Loading FLUX.2-klein editor (first run downloads ~4 GB)...")
-    load_report = MANAGER.load_flux_editor()
-    pipe = MANAGER.get_flux_editor()
+    load_report = None
+    try:
+        progress(0.0, desc="Loading Qwen-Image-2.1-Turbo (first run downloads ~11.5 GB)...")
+        load_report = MANAGER.load_qwen()
+        pipe = MANAGER.get_qwen()
 
-    seed_i = _seed_from(seed)
-    progress(0.0, desc=f"Editing  steps={steps}  guidance={guidance}  seed={seed_i}")
-    t_start = time.time()
+        image = input_image.convert("RGBA")  # Qwen-Image-2.1 takes RGBA references
 
-    def on_step_end(pipe, step_index, timestep, callback_kwargs, _steps=steps, _seed=seed_i):
-        progress(
-            (step_index + 1) / _steps,
-            desc=f"Editing  step {step_index + 1}/{_steps}  seed={_seed}",
+        seed_i = _seed_from(seed)
+        progress(0.0, desc=f"Editing  ({w}x{h}, 8-step Turbo schedule, seed={seed_i})")
+        t_start = time.time()
+
+        def on_step_end(pipe, step_index, timestep, callback_kwargs, _seed=seed_i):
+            progress(
+                (step_index + 1) / 8,
+                desc=f"Editing  step {step_index + 1}/8  seed={_seed}",
+            )
+            return callback_kwargs
+
+        with torch.inference_mode():
+            result = pipe(
+                prompt=prompt.strip(),
+                image=image,
+                width=w,
+                height=h,
+                true_cfg_scale=1.0,
+                use_kv_cache=True,
+                generator=torch.Generator("cpu").manual_seed(seed_i),
+                callback_on_step_end=on_step_end,
+            )
+
+        progress(1.0, desc="Done")
+        elapsed = time.time() - t_start
+        out = result.images[0]
+        p = _timestamped_path("edit")
+        out.save(p)
+
+        status = (
+            f"{_fmt_load_report(load_report, 'Qwen-Image-2.1-Turbo')}  |  "
+            f"Edited in {elapsed:.1f}s (8-step schedule, seed={seed_i})  |  "
+            f"Saved: {p.name}"
         )
-        return callback_kwargs
+        return [(out, "edited")], status
 
-    with torch.inference_mode():
-        result = pipe(
-            image=input_image,
-            prompt=prompt.strip(),
-            num_inference_steps=int(steps),
-            guidance_scale=float(guidance),
-            generator=torch.Generator("cpu").manual_seed(seed_i),
-            callback_on_step_end=on_step_end,
-        )
-    gc.collect()
-    if torch.backends.mps.is_available():
-        torch.mps.empty_cache()
-    progress(1.0, desc="Done")
-    elapsed = time.time() - t_start
-    out = result.images[0]
-    p = _timestamped_path("edit")
-    out.save(p)
-
-    status = (
-        f"{_fmt_load_report(load_report, 'FLUX editor')}  |  "
-        f"Edited in {elapsed:.1f}s ({steps} steps, seed={seed_i})  |  "
-        f"Saved: {p.name}"
-    )
-    return [(out, "edited")], status
+    except Exception as exc:
+        return None, f"⚠️ Edit failed — {type(exc).__name__}: {exc}"
+    finally:
+        _cleanup_mps()
 
 
 # ---------------------------------------------------------------- UI
-SIZE_PRESETS = [
-    "512 x 512 (square, fastest)",
-    "768 x 768 (square)",
-    "640 x 896 (portrait 9:16)",
-    "896 x 640 (landscape 16:9)",
-    "832 x 624 (4:3 landscape)",
-    "Custom",
-]
+# Qwen-Image-2.1 is trained at 2K-class resolutions (e.g. 2048x2048 for 1:1).
+# On a 16 GB Mac the denoise working set scales with token count, so the
+# presets below stay in the 512-1024 band; native 2K works but is slow here.
+SIZE_PRESETS: OrderedDict[str, tuple[int, int]] = OrderedDict(
+    [
+        ("512 x 512 (square, fastest)", (512, 512)),
+        ("768 x 768 (square)", (768, 768)),
+        ("640 x 896 (portrait 9:16)", (640, 896)),
+        ("896 x 640 (landscape 16:9)", (896, 640)),
+        ("832 x 624 (4:3 landscape)", (832, 624)),
+        ("1024 x 1024 (square, native-class)", (1024, 1024)),
+        ("Custom", (0, 0)),  # sentinel; Custom uses the sliders
+    ]
+)
 
 CUSTOM_CSS = """
 #title { text-align: center; }
@@ -249,28 +270,47 @@ DEFAULT_THEME_JS = """
 }
 """
 
+SCHEDULE_NOTE = (
+    "Turbo's 8-step sampling schedule is baked into the checkpoint — "
+    "there are no steps/guidance knobs to tune."
+)
+
+
+def _size_controls(default_preset: str):
+    """Shared size dropdown + custom-size accordion (returned as a tuple)."""
+    size = gr.Dropdown(
+        list(SIZE_PRESETS.keys()),
+        value=default_preset,
+        label="Size",
+        info="512-1024 px presets fit 16 GB comfortably; the model's native 2K works but is slow on M-series.",
+    )
+    with gr.Accordion("Custom size", open=False) as custom_box:
+        custom_h = gr.Slider(256, 1536, value=512, step=16, label="Height")
+        custom_w = gr.Slider(256, 1536, value=512, step=16, label="Width")
+
+    def _toggle(preset: str):
+        return gr.update(open=(preset == "Custom"))
+
+    size.change(_toggle, inputs=size, outputs=custom_box)
+    return size, custom_h, custom_w
+
 
 def build_ui() -> gr.Blocks:
     with gr.Blocks(title="AI Image Studio") as demo:
         gr.HTML(
             "<div id='title'>"
             "<h1>🎨 AI Image Studio</h1>"
-            "<p>Local Z-Image-Turbo generation + FLUX.2-klein-4B editing on Apple Silicon MPS</p>"
+            "<p>Qwen-Image-2.1-Turbo generation + instruction editing on Apple Silicon MPS</p>"
             "</div>"
         )
 
-        with gr.Tab("✨ Generate (Z-Image-Turbo)"):
+        with gr.Tab("✨ Generate (Qwen-Image-2.1-Turbo)"):
             with gr.Row():
                 with gr.Column(scale=3):
                     prompt = gr.Textbox(
                         label="Prompt",
                         placeholder="Describe the image. e.g. 'a red apple on a wooden table, studio lighting'",
                         lines=3,
-                    )
-                    negative = gr.Textbox(
-                        label="Negative prompt (optional)",
-                        placeholder="blurry, low quality, distorted",
-                        lines=1,
                     )
                     generate_btn = gr.Button("Generate", variant="primary")
                     gallery = gr.Gallery(
@@ -282,29 +322,19 @@ def build_ui() -> gr.Blocks:
                     )
                     gen_status = gr.Markdown()
                 with gr.Column(scale=2):
-                    size = gr.Dropdown(
-                        SIZE_PRESETS,
-                        value=SIZE_PRESETS[0],
-                        label="Size",
-                    )
-                    with gr.Accordion("Custom size", open=False):
-                        custom_h = gr.Slider(256, 1280, value=512, step=16, label="Height")
-                        custom_w = gr.Slider(256, 1280, value=512, step=16, label="Width")
+                    size, custom_h, custom_w = _size_controls(list(SIZE_PRESETS.keys())[0])
                     num_images = gr.Slider(1, 4, value=1, step=1, label="Number of images")
                     with gr.Accordion("Advanced", open=False):
-                        steps = gr.Slider(4, 16, value=8, step=1,
-                                          label="Steps (8 is Turbo default)")
-                        guidance = gr.Slider(0.0, 10.0, value=0.0, step=0.1,
-                                             label="Guidance (0.0 for Turbo)")
                         seed = gr.Number(label="Seed (-1 for random)", value=-1)
+                        gr.Markdown(f"<small>{SCHEDULE_NOTE}</small>")
 
             generate_btn.click(
-                fn=turbo_generate,
-                inputs=[prompt, negative, size, custom_h, custom_w, steps, guidance, seed, num_images],
+                fn=qwen_generate,
+                inputs=[prompt, size, custom_h, custom_w, seed, num_images],
                 outputs=[gallery, gen_status],
             )
 
-        with gr.Tab("✂️ Edit (FLUX.2-klein-4B)"):
+        with gr.Tab("✂️ Edit (Qwen-Image-2.1-Turbo)"):
             with gr.Row():
                 with gr.Column(scale=2):
                     input_image = gr.Image(label="Image to edit", type="pil", height=320)
@@ -322,24 +352,24 @@ def build_ui() -> gr.Blocks:
                         placeholder="e.g. 'make the sky a dramatic sunset', 'turn the apple into an orange', 'add snow'",
                         lines=3,
                     )
+                    edit_size, edit_custom_h, edit_custom_w = _size_controls(
+                        "1024 x 1024 (square, native-class)"
+                    )
                     with gr.Accordion("Advanced", open=False):
-                        edit_steps = gr.Slider(4, 50, value=8, step=1,
-                                                label="Steps (8 default; model is 4-step-distilled)")
-                        edit_guidance = gr.Slider(0.0, 10.0, value=1.0, step=0.1,
-                                                   label="Guidance (1.0; model is guidance-distilled)")
                         edit_seed = gr.Number(label="Seed (-1 for random)", value=-1)
+                        gr.Markdown(f"<small>{SCHEDULE_NOTE}</small>")
                     edit_btn = gr.Button("Edit", variant="primary")
 
             edit_btn.click(
-                fn=flux_edit,
-                inputs=[input_image, edit_prompt, edit_steps, edit_guidance, edit_seed],
+                fn=qwen_edit,
+                inputs=[input_image, edit_prompt, edit_size, edit_custom_h, edit_custom_w, edit_seed],
                 outputs=[edit_gallery, edit_status],
             )
 
         gr.HTML(
             "<hr/><p style='text-align:center;color:#888;font-size:0.85em'>"
-            "Turbo: <code>Disty0/Z-Image-Turbo-SDNQ-uint4-svd-r32</code> · "
-            "Editor: <code>Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic</code>"
+            "Model: <code>OzzyGT/Qwen_Image_2_1_Turbo_sdnq_dynamic_4bit</code> (SDNQ int4) · "
+            "weights under the Qwen Research License (non-commercial)"
             "</p>"
         )
 
@@ -351,7 +381,7 @@ if __name__ == "__main__":
     FAVICON = HERE / "favicon.png"
 
     app = build_ui()
-    app.queue(default_concurrency_limit=1)  # serialize: only one model run at a time on 16 GB
+    app.queue(default_concurrency_limit=1)  # serialize: one model run at a time on 16 GB
     app.launch(
         server_name="127.0.0.1",
         server_port=7860,
