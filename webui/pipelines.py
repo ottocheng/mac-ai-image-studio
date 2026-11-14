@@ -1,4 +1,4 @@
-"""Pipeline loader for the AI Image Studio web UI (Qwen-Image-2.1-Turbo).
+"""Pipeline loader for Mac (M series) AI Image Studio (Qwen-Image-2.1-Turbo).
 
 Memory constraint: 16 GB unified memory on the target Macs (base M-series).
   - Checkpoint: OzzyGT/Qwen_Image_2_1_Turbo_sdnq_dynamic_4bit

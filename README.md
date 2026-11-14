@@ -1,4 +1,4 @@
-# AI Image Studio
+# Mac (M series) AI Image Studio - Based on Qwen Image 2.1
 
 Local AI image generation + editing for **Apple Silicon Macs (M-series)**,
 accelerated by MPS (Metal Performance Shaders).
@@ -41,8 +41,8 @@ Faster M-series chips (M2/M3/M4, especially Pro/Max) run proportionally quicker.
 
 ```bash
 # 1. Get the code
-git clone https://github.com/ottocheng/ai-image-studio.git
-cd ai-image-studio
+git clone https://github.com/ottocheng/mac-ai-image-studio.git
+cd mac-ai-image-studio
 
 # 2. Install uv (skip if `which uv` already prints a path)
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -65,7 +65,7 @@ survives a re-clone.
 
 ## Quick start
 
-**Easiest — double-click** `AI-Image-Studio.command` in Finder. A Terminal
+**Easiest — double-click** `Mac-AI-Image-Studio.command` in Finder. A Terminal
 window opens, the server boots, and your browser launches at
 http://127.0.0.1:7860. Close the Terminal window to stop.
 
@@ -109,8 +109,8 @@ The browser tab shows a 🎨 favicon.
 ## What's installed
 
 ```
-ai-image-studio/                         # project root
-├── AI-Image-Studio.command              # ⭐ double-click in Finder to launch
+mac-ai-image-studio/                    # project root
+├── Mac-AI-Image-Studio.command         # ⭐ double-click in Finder to launch
 ├── webui/                               # the app (a package; run with python -m webui.app)
 │   ├── app.py                           #   Gradio: Generate tab + Edit tab (both Qwen)
 │   ├── pipelines.py                     #   PipelineManager — lazy-load, mutex-guarded

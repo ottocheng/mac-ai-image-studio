@@ -1,7 +1,7 @@
 [project]
-name = "ai-image-studio"
+name = "mac-ai-image-studio"
 version = "0.2.0"
-description = "Local AI image studio: Qwen-Image-2.1-Turbo generation + editing on Apple Silicon (MPS)."
+description = "Mac (M series) AI Image Studio - Based on Qwen Image 2.1"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

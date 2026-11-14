@@ -1,5 +1,5 @@
 #!/bin/bash
-# Double-click this file in Finder to start AI Image Studio.
+# Double-click this file in Finder to start Mac (M series) AI Image Studio.
 # A Terminal window opens, the model server boots, and your browser
 # launches at http://127.0.0.1:7860. Close the Terminal window to stop.
 
@@ -25,7 +25,7 @@ if [ ! -d ".venv" ]; then
 fi
 
 echo "------------------------------------------------------------"
-echo " AI Image Studio"
+echo " Mac (M series) AI Image Studio - Based on Qwen Image 2.1"
 echo " Browser will open at http://127.0.0.1:7860 automatically."
 echo " Close this Terminal window to stop the server."
 echo "------------------------------------------------------------"

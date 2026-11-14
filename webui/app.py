@@ -2,7 +2,7 @@
 
 Run (from the repo root):
     uv run python -m webui.app
-    # or just double-click AI-Image-Studio.command in Finder
+    # or just double-click Mac-AI-Image-Studio.command in Finder
 
 Then open http://127.0.0.1:7860 in your browser.
 
@@ -296,11 +296,11 @@ def _size_controls(default_preset: str):
 
 
 def build_ui() -> gr.Blocks:
-    with gr.Blocks(title="AI Image Studio") as demo:
+    with gr.Blocks(title="Mac (M series) AI Image Studio") as demo:
         gr.HTML(
             "<div id='title'>"
-            "<h1>🎨 AI Image Studio</h1>"
-            "<p>Qwen-Image-2.1-Turbo generation + instruction editing on Apple Silicon MPS</p>"
+            "<h1>🎨 Mac (M series) AI Image Studio</h1>"
+            "<p>Based on Qwen Image 2.1 — Turbo generation + instruction editing on Apple Silicon MPS</p>"
             "</div>"
         )
 
